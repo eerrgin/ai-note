@@ -1,0 +1,324 @@
+================================================================
+YAPAY ZEKÂ DESTEKLİ BİR UYGULAMANIN UÇTAN UCA TEKNİK ANLATIMI
+(Dil modeli • RAG • Araç geliştirme • İnsan-AI iş bölümü)
+================================================================
+
+Bu metin, bir dil modeli etrafında kurulan bir uygulamanın nasıl
+tasarladığını, hangi noktalarda kırıldığını ve nerede insan
+müdahalesinin zorunlu hale geldiğini somut parametreler ve hata
+senaryoları üzerinden anlatır. Amaç reklam değil, mühendislik
+kaydıdır.
+
+----------------------------------------------------------------
+1. DİL MODELİ KATMANI: API Mİ, YEREL ÇIKARIM MI?
+----------------------------------------------------------------
+
+1.1 Modelin görevi
+------------------
+Uygulamadaki model, serbest sohbet için değil; "yapılandırılmış
+çıktı üretme" görevi için kullanıldı. Modelden beklenen şey:
+
+  • Girdi: kullanıcı sorusu + getirilen bağlam parçaları (chunk).
+  • Çıktı: JSON şemasına uyan {cevap, kaynaklar[], guven} nesnesi.
+  • Kısıt: Bağlamda olmayan bir bilgi iddia edilirse "bilinmiyor"
+    döndürmesi.
+
+Bu yüzden model, "yaratıcı yazma" sıcaklığında değil; düşük
+sıcaklıkta (temperature ≈ 0.1–0.3) ve sabit bir şema denetimiyle
+çalıştırıldı. Sıcaklık 0'a yaklaştıkça determinizm artar ama bazı
+modellerde tekrara düşme eğilimi de artar; bu yüzden tam 0 değil,
+0.2 civarı tercih edildi.
+
+1.2 API yolu
+------------
+API tarafında dikkat edilen teknik noktalar:
+
+  • Akış (streaming): Kullanıcıya ilk token 300–800 ms içinde
+    ulaşsın diye SSE/stream açıldı. Ama JSON şeması gerektiren
+    çağrılarda akış kapatıldı; çünkü yarım JSON ayrıştırma
+    hatası üretiyordu.
+  • Yeniden deneme: 429 (rate limit) ve 5xx için üstel geri
+    çekilme (exponential backoff): 500 ms → 1 s → 2 s → 4 s,
+    en fazla 4 deneme. 400 (şema hatası) retry EDİLMEZ; çünkü
+    aynı istek aynı hatayı verir.
+  • Bağlam taşması: İstek, modelin bağlam penceresinin %80'ini
+    geçiyorsa kırpma yerine özetleme + yeniden sıralama uygulandı.
+  • Maliyet kontrolü: Her çağrıda token sayısı loglandı; aylık
+    bütçe eşiği aşılırsa daha küçük modele otomatik düşüş
+    (fallback) devreye girdi.
+
+1.3 Yerel çıkarım yolu
+----------------------
+Yerel çıkarım, gizlilik gerektiren belgeler için ikinci yol
+olarak tutuldu. Teknik ayrıntılar:
+
+  • Model formatı: GGUF, 4-bit kuantizasyon (Q4_K_M). Bu,
+    kalite kaybı ile bellek tasarrufu arasında pratik bir denge;
+    Q2/Q3'te talimat takibi belirgin bozuluyor.
+  • Donanım: CPU'da çalışacak şekilde katman sayısı ayarlandı;
+    GPU varsa katmanların tamamı GPU'ya taşındı (n_gpu_layers).
+  • KV önbelleği: Aynı oturumdaki tekrarlı sistem istemleri
+    için önbellek korundu; önbellek sıfırlanınca ilk token
+    gecikmesi 3–4 katına çıkıyordu.
+  • Eşzamanlılık: Tek model örneği üzerinde paralel istek
+    kuyruğa alındı; paralel çıkarım bellek taşmasına yol açtı.
+  • Belirleyicilik: Yerel motorda sıcaklık 0 yapıldığında bile
+    donanım/kütüphane sürümüne göre çıktı değişebiliyor; bu
+    yüzden "aynı çıktı" garantisi verilmedi, yalnızca "aynı
+    şema" garantisi verildi.
+
+1.4 İki yol arasındaki karar
+----------------------------
+Karar statik değil, istek bazlıydı:
+  • Belge "gizli" işaretliyse → yerel.
+  • Cevap 2 saniyeden kısa sürede gerekiyorsa → API.
+  • Yerel model şema hatası verirse → API'ye tek seferlik
+    yükseltme, sonuç kullanıcıya "yedek yol" etiketiyle sunuldu.
+
+----------------------------------------------------------------
+2. BİLGİ ERİŞİMİ (RAG) KATMANI
+----------------------------------------------------------------
+
+2.1 Belge parçalama (chunking)
+------------------------------
+Naif sabit boyutlu parçalama kullanılmadı; çünkü tablo ve başlık
+yapısı bozuluyordu. Uygulanan sıra:
+
+  1) Yapısal ayrıştırma: PDF → başlık, paragraf, tablo, madde
+     işareti düzeyinde bölündü.
+  2) Hiyerarşik parçalama:
+       • Üst parça (parent): 900–1200 token, bağlamı korur.
+       • Alt parça (child): 200–350 token, arama için kullanılır.
+     Arama alt parça üzerinde yapılır; modele üst parça verilir.
+     Bu "küçük ara, büyük besle" yaklaşımı, tek başına küçük
+     parça kullanmanın bağlam kaybı sorununu azaltır.
+  3) Örtüşme (overlap): Alt parçalarda ~%15 örtüşme (yaklaşık
+     30–50 token). Sıfır örtüşme, cümle ortasında kesilen
+     anlamları kaçırıyordu; %30'un üzeri ise aynı içeriğin
+     tekrar tekrar getirilmesine yol açıyordu.
+  4) Tablo kuralı: Tablolar asla bölünmedi; bölünmesi
+     gerekiyorsa başlık satırı her parçaya kopyalandı.
+  5) Meta veri: Her parçaya kaynak kimliği, sayfa numarası,
+     bölüm başlığı ve tarih eklendi. Tarih, aynı konuda eski/yeni
+     belge çakışmasında sıralamayı etkiledi.
+
+2.2 Gömlem (embedding) üretimi
+------------------------------
+  • Gömlem modeli, dil modelinden ayrı tutuldu; cevap üreten
+    model ile arama yapan model farklı olabilir.
+  • Vektörler normalize edildi (birim uzunluk) ve benzerlik
+    kosinüs ile ölçüldü. Normalizasyon yapılmazsa iç çarpım
+    (dot product) ile kosinüs karışıyor, eşik değerleri
+    kayıyordu.
+  • Toplu (batch) gömleme: Belge sayısı fazlaysa 32–64'lük
+    gruplar hâlinde üretildi; tek tek üretim çok yavaştı,
+    çok büyük gruplar bellek şişiriyordu.
+  • Yeniden gömleme politikası: Belge değişmediyse gömlem
+    yeniden üretilmedi; parça kimliği + içerik hash'i ile
+    önbelleklendi. Hash değişince yalnızca o parça yenilendi.
+  • Sürümleme: Gömlem modeli değişince eski vektörler
+    kullanılamaz; bu yüzden vektör deposunda "model sürümü"
+    alanı tutuldu ve sürüm uyuşmazlığında arama reddedildi.
+
+2.3 Arama (retrieval)
+---------------------
+  • Hibrit arama: Yoğun (vektör) arama + seyrek (anahtar
+    kelime/BM25 benzeri) arama birlikte kullanıldı. Yalnızca
+    vektör araması, ürün kodu ve kısaltma gibi birebir
+    eşleşmelerde zayıf kalıyordu.
+  • Birleştirme: İki listenin sonuçları ağırlıklı birleştirme
+    (reciprocal rank fusion benzeri) ile sıralandı; ham
+    skorlar doğrudan toplanmadı, çünkü iki yöntemin skor
+    ölçekleri farklı.
+  • Yeniden sıralama (rerank): İlk 20 sonuç, daha küçük bir
+    yeniden sıralama modeliyle tekrar puanlandı; modele
+    giden ilk 5 parça buradan seçildi. İlk 20'nin altına
+    inildiğinde isabet belirgin düşüyordu.
+  • Eşik: Benzerlik eşiğinin altındaki sonuçlar atıldı; eşik
+    altı parçaları modele vermek, uydurma cevabı artırıyordu.
+
+2.4 Arama değerlendirmesi
+-------------------------
+Arama, "göze iyi görünme" ile değil, altın küme (golden set)
+ile ölçüldü:
+
+  • Altın küme: 150 soru; her soru için doğru kabul edilen
+    parça kimlikleri elle işaretlendi.
+  • Ölçütler:
+      - Recall@k: İlk k sonuçta doğru parçanın bulunma oranı.
+      - MRR (ortalama ters sıra): Doğru parça kaçıncı sırada?
+      - Hit rate: En az bir doğru parça getirildi mi?
+  • Karşılaştırma: Her parçalama/gömlem/eşik değişikliği
+    aynı altın küme üzerinde ölçüldü. Değişiklik "iyi
+    hissettiriyorsa" değil, Recall@5 veya MRR artıyorsa
+    kabul edildi.
+  • Ayrı kontrol: "Cevabı belgede olmayan" 30 soru da
+    kümeye eklendi; sistem bunlara "bulunamadı" demeliydi.
+    Bu, gereksiz getirme (false retrieval) oranını ortaya
+    çıkardı.
+
+2.5 Sık görülen RAG hataları (bu projede gözlenenler)
+-----------------------------------------------------
+  • "Ortada kaybolma": Uzun bağlamda ortadaki parçaların
+    dikkate alınmaması. Çözüm: En alakalı parçalar başa ve
+    sona yerleştirildi.
+  • Bağlam zehirlenmesi: Benzer ama yanlış belge, doğru
+    cevabı bastırdı. Çözüm: Yeniden sıralama + eşik.
+  • Parça sınırı kopukluğu: Cümle iki parçaya bölününce
+    anlam kayboldu. Çözüm: Cümle sınırına hizalı bölme.
+  • Eski belge baskınlığı: Güncel olmayan belge üstte geldi.
+    Çözüm: Tarih ağırlığı + kaynak önceliği.
+
+----------------------------------------------------------------
+3. YAPAY ZEKÂ ARACI: PROBLEM, HATA, TEST
+----------------------------------------------------------------
+
+3.1 Çözülen problem
+-------------------
+Araç, teknik destek taleplerini "önce ilgili belgelerden
+cevapla, cevaplayamıyorsan insana yönlendir" mantığıyla
+sınıflandırıp yanıtlar. Ölçülen hedef: İnsana gitmeden
+çözülen talep oranını artırmak, YANLIŞ cevap oranını ise
+artırmamak.
+
+3.2 Hata verdiği durumlar (somut)
+---------------------------------
+  • Belgede sayı ve birim karışıklığı: "10 GB" ile "10 Gbps"
+    karıştırıldı. Model birimi bağlamdan almıyor, ezberden
+    tamamlıyordu. Çözüm: Birimlerin parça içinde açıkça
+    tutulması + cevap şemasında birim alanı zorunluluğu.
+  • Olumsuzlama (negation): "X desteklenmez" cümlesi,
+    "X desteklenir" olarak özetlendi. Çözüm: Olumsuz
+    cümleler için ayrı istem kuralı ve örnek.
+  • Çok dilli karışım: Soru Türkçe, belge İngilizce olunca
+    terim çevirisi tutarsızlaştı. Çözüm: Terim sözlüğü +
+    gömlem modelinin çok dilli seçilmesi.
+  • Aşırı uzun soru: 2000+ token'lık soruda model ilk
+    kısmı dikkate alıp sonu yok saydı. Çözüm: Soru önce
+    özetlendi, sonra arama yapıldı.
+  • Şema ihlali: Model bazen JSON dışına metin ekledi.
+    Çözüm: Katı şema doğrulama + başarısızsa yeniden
+    istem (en fazla 2 kez) + hâlâ başarısızsa güvenli
+    "yanıtlanamadı" dönüşü.
+  • Araç/API zaman aşımı: Vektör deposu yavaş yanıt verince
+    araç boş bağlamla devam etti ve uydurdu. Çözüm:
+    Bağlam boşsa model çağrılmadan "bilinmiyor" dönüşü.
+
+3.3 Test yaklaşımı
+------------------
+  • Birim testleri: Parçalama, gömlem normalizasyonu,
+    şema doğrulama, eşik mantığı.
+  • Altın küme regresyon testi: Her sürümde 150 soru
+    çalıştırıldı; Recall@5, MRR ve "yanlış cevap" oranı
+    önceki sürümle karşılaştırıldı. Düşüş varsa sürüm
+    geri alındı.
+  • Kaçamak (adversarial) testler: Belgede olmayan soru,
+    çelişkili belge, çok kısa soru, çok uzun soru, yabancı
+    dil, prompt enjeksiyonu denemeleri ("önceki talimatları
+    yok say" gibi).
+  • Gecikme ve maliyet testi: P50/P95 yanıt süresi ve
+    istek başına token maliyeti izlendi; eşik aşılırsa
+    uyarı üretildi.
+  • İnsan değerlendirmesi: Rastgele 100 cevap, "doğru /
+    kısmen doğru / yanlış / uydurma" olarak elle
+    etiketlendi. Otomatik metrikler tek başına yeterli
+    görülmedi.
+
+----------------------------------------------------------------
+4. KOD YAPAY ZEKÂ YARDIMIYLA YAZILIRKEN İNSANIN ROLÜ
+----------------------------------------------------------------
+
+Model kod ürettiğinde insanın yaptığı iş "kabul etmek" değil,
+şu dört başlıkta karar vermek oldu:
+
+4.1 Tasarım seçimleri (insan)
+-----------------------------
+  • Katman sınırları: Dil modeli, arama ve şema doğrulama
+    ayrı modüllere bölündü; model çıktısı asla doğrudan
+    veritabanına yazılmadı.
+  • Varsayılanlar: Sıcaklık, parça boyutu, örtüşme, eşik
+    gibi değerler modele bırakılmadı; insan sabitledi ve
+    gerekçesini kaydetti.
+  • Hata politikası: "Model başarısız olursa ne olacak?"
+    sorusunun cevabı (güvenli dönüş, insana yönlendirme)
+    insan tarafından tanımlandı.
+  • Gizlilik: Hangi belgenin buluta, hangisinin yerele
+    gideceği kuralı insan belirledi.
+
+4.2 Doğrulama
+-------------
+  • Üretilen kod, çalıştığı için değil, testleri geçtiği
+    için kabul edildi.
+  • Sınır durumları (boş girdi, çok uzun girdi, ağ hatası,
+    şema ihlali) ayrıca test edildi.
+  • Gömlem normalizasyonu, kosinüs/eşik gibi matematiksel
+    ayrıntılar elle kontrol edildi; model bunları sık sık
+    yarım bırakıyordu.
+  • Bağımlılık ve lisans kontrolü: Modelin önerdiği
+    kütüphanelerin sürümleri ve lisansları elle doğrulandı.
+
+4.3 Düzeltmeler
+---------------
+  • Modelin ürettiği "sessizce yut" (try/except pass)
+    hata yakalama kalıpları, hataları gizlediği için
+    loglama ve yükseltme ile değiştirildi.
+  • Sabit kodlanmış (hard-coded) API anahtarları ve
+    adresler ortam değişkenlerine taşındı.
+  • Kopyala-yapıştır ile çoğalan parçalama mantığı tek
+    fonksiyona indirildi.
+  • Yeniden deneme mantığı, her hatada değil yalnızca
+    geçici hatalarda çalışacak şekilde daraltıldı.
+
+4.4 Kayıt ve izlenebilirlik
+---------------------------
+  • Hangi kodun model tarafından üretildiği, hangi
+    bölümünün insan tarafından yeniden yazıldığı
+    sürüm kontrolünde not edildi.
+  • Her istem (prompt) sürümlendi; istem değişikliği kod
+    değişikliği gibi test edildi.
+  • Üretimde her istek için: kullanılan model sürümü,
+    getirilen parça kimlikleri, şema doğrulama sonucu ve
+    gecikme loglandı. Bir hata bildirildiğinde cevabın
+    hangi parçalardan üretildiği geriye dönük bulunabildi.
+
+----------------------------------------------------------------
+5. KISA KONTROL LİSTESİ (uygulama sırasında kullanılan)
+----------------------------------------------------------------
+
+Dil modeli:
+  [ ] Modelin görevi tek cümleyle tanımlı mı?
+  [ ] Çıktı şeması zorunlu ve doğrulanıyor mu?
+  [ ] Bağlam taşması nasıl yönetiliyor?
+  [ ] Retry yalnızca geçici hatalarda mı?
+  [ ] API/yerel seçimi kurala bağlı mı?
+
+RAG:
+  [ ] Parçalama yapıya saygılı mı, örtüşme ölçülü mü?
+  [ ] Gömlemler normalize ve sürümlü mü?
+  [ ] Hibrit arama + yeniden sıralama var mı?
+  [ ] Altın küme ve ölçütler (Recall@k, MRR) tanımlı mı?
+  [ ] "Belgede yok" soruları test ediliyor mu?
+
+Araç ve test:
+  [ ] Hata durumları (birim, olumsuzlama, dil, uzunluk,
+      şema, zaman aşımı) listeli mi?
+  [ ] Kaçamak testler ve insan değerlendirmesi var mı?
+  [ ] Gecikme ve maliyet izleniyor mu?
+
+İnsan-AI iş bölümü:
+  [ ] Tasarım varsayılanları insan tarafından sabitlendi mi?
+  [ ] Üretilen kod test geçtiği için mi kabul edildi?
+  [ ] Sessiz hata yutma ve sabit anahtar gibi kalıplar
+      temizlendi mi?
+  [ ] İstem ve model sürümleri kayıt altında mı?
+
+================================================================
+SON NOT
+================================================================
+Bu anlatımdaki sayılar (parça boyutları, örtüşme oranları,
+eşikler, retry süreleri) tek bir projede gözlenen aralıklardır;
+başka bir belge kümesinde yeniden ölçülmeden kopyalanmamalıdır.
+Asıl aktarılabilir olan şey sayılar değil, "her değişikliği
+altın küme üzerinde ölç, her hata modunu ayrı test et, model
+çıktısını asla doğrulanmadan kullanma" yaklaşımıdır.
+================================================================
