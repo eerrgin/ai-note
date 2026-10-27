@@ -1,0 +1,144 @@
+================================================================
+ERGİN TEKNİK ATÖLYE
+UÇTAN UCA TEKNİK TASARIM VE DOĞRULAMA NOTLARI
+================================================================
+
+Bu belge, bir yazılım özelliğinin nasıl tasarlandığını, hangi varsayımlara dayandığını, nasıl sınandığını ve nerede başarısız olabileceğini kayıt altına almak için hazırlanmıştır. Amaç gösterişli vaatler değil; anlaşılır kararlar, izlenebilir testler ve güvenilir davranıştır.
+
+----------------------------------------------------------------
+1. PROBLEM VE KAPSAM
+----------------------------------------------------------------
+
+Her geliştirme başlamadan önce şu sorular cevaplanır:
+
+  • Kullanıcı hangi işi tamamlamak istiyor?
+  • Özelliğin girdisi ve çıktısı tam olarak nedir?
+  • Hangi durumlar bu özelliğin kapsamı dışındadır?
+  • Başarı hangi gözlemlenebilir ölçütlerle değerlendirilecektir?
+  • Hangi veri hassas kabul edilmelidir?
+
+Kapsam dışındaki davranışlar gizlice eklenmez. Bilinmeyen gereksinimler açık bir varsayım olarak kaydedilir ve doğrulanması gerekenler ayrı tutulur.
+
+----------------------------------------------------------------
+2. SÖZLEŞME VE VERİ MODELİ
+----------------------------------------------------------------
+
+Her bileşenin bir arayüz sözleşmesi bulunmalıdır:
+
+  • Zorunlu ve isteğe bağlı alanlar
+  • Alan türleri ve izin verilen değerler
+  • Boş, eksik veya bozuk girişlerin davranışı
+  • Hata biçimi ve hata mesajının anlamı
+  • Geriye dönük uyumluluk beklentisi
+
+Dışarıdan gelen veri güvenilir kabul edilmez. Yapı doğrulanır, metinler uygun bağlamda kaçışlanır ve beklenmeyen alanlar sessizce kritik kararlara dönüşmez.
+
+----------------------------------------------------------------
+3. MİMARİ VE SORUMLULUKLAR
+----------------------------------------------------------------
+
+Bir bileşen mümkün olduğunca tek bir sorumluluğa sahip olmalıdır. Arayüz, iş kuralları, veri erişimi ve dış servis bağlantıları birbirinden ayrılır.
+
+  • Arayüz: kullanıcı girdisi ve sonuçların gösterimi
+  • İş katmanı: kurallar, durum geçişleri ve hesaplamalar
+  • Veri katmanı: okuma, yazma ve kalıcılık
+  • Entegrasyon katmanı: dış sistemlerle kontrollü iletişim
+  • Test katmanı: beklenen davranış ve sınır durumları
+
+Bir dosya birden fazla sorumluluk üstlenmeye başladığında, ayırmanın sağlayacağı açıklık ve bakım maliyeti karşılaştırılır. Sırf klasör sayısını artırmak için soyutlama yapılmaz.
+
+----------------------------------------------------------------
+4. VERİ AKIŞI VE ÇALIŞMA ORTAMI
+----------------------------------------------------------------
+
+Her veri akışında kaynağın neresi olduğu ve verinin hangi sınırları geçtiği belgelenir.
+
+  • Yerel işlem mi, ağ isteği mi yapılıyor?
+  • Veri diske, tarayıcı depolamasına veya günlüklere yazılıyor mu?
+  • Bağlantı kesildiğinde hangi davranış görülür?
+  • Önbellek varsa ne zaman geçersiz kılınır?
+  • Büyük dosya veya yüksek eşzamanlılık altında ne olur?
+
+Yerel ve uzak çalışma yolları aynı sözleşmeyi sunabiliyorsa, farklılıklar açık biçimde sınırlandırılır. Bir hata durumunda kullanıcıya yanlış bir başarı işareti gösterilmez.
+
+----------------------------------------------------------------
+5. DOĞRULAMA VE HATA YÖNETİMİ
+----------------------------------------------------------------
+
+Başarılı yol kadar başarısız yol da tasarlanır:
+
+  • Eksik girdi için açıklayıcı geri bildirim
+  • Ağ hatası, zaman aşımı ve sunucu hatası için ayrı davranış
+  • Yeniden deneme yapılabilecek ve yapılmaması gereken durumlar
+  • Yinelenen işlemleri önlemek için idempotency
+  • İptal edilen işlemlerin temiz biçimde durması
+  • Beklenmeyen durumlar için güvenli geri dönüş
+
+Yeniden deneme, aynı hatayı körlemesine tekrarlamamalıdır. Geçici hatalarda sınırlı geri çekilme kullanılabilir; geçersiz istekler ise düzeltilmeden tekrar gönderilmez.
+
+----------------------------------------------------------------
+6. GÜVENLİK VE GİZLİLİK
+----------------------------------------------------------------
+
+  • Gizli anahtarlar kaynak koduna veya yayınlanan dosyalara yazılmaz.
+  • Günlüklerde parola, oturum anahtarı ve kişisel veri tutulmaz.
+  • İzin kontrolü sunucu tarafında da uygulanır.
+  • Harici bağlantıların hedefi ve gönderilen veri incelenir.
+  • Hata mesajları iç sistem ayrıntılarını gereksiz yere açığa çıkarmaz.
+  • Testler yalnızca sahip olunan veya kullanım izni verilen sistemlerde yürütülür.
+
+Bir özelliğin veriyi dışarı göndermediği söyleniyorsa, bu iddia kod akışı ve ağ davranışı üzerinden doğrulanmalıdır.
+
+----------------------------------------------------------------
+7. TEST PLANI
+----------------------------------------------------------------
+
+En az şu test katmanları düşünülür:
+
+  • Birim testleri: tek fonksiyon veya kural
+  • Entegrasyon testleri: bileşenlerin birlikte çalışması
+  • Arayüz testleri: temel kullanıcı akışları ve erişilebilirlik
+  • Hata testleri: bağlantı yokluğu, bozuk veri ve zaman aşımı
+  • Regresyon testleri: daha önce düzeltilmiş hataların geri dönmemesi
+
+Test adı, neyin garanti edildiğini anlatmalıdır. Bir testin geçmesi, yalnızca kapsadığı davranışı doğrular; tüm sistemin hatasız olduğuna dair genel kanıt sayılmaz.
+
+----------------------------------------------------------------
+8. PERFORMANS VE İŞLETİM
+----------------------------------------------------------------
+
+Gerçek darboğaz görülmeden karmaşıklık eklenmez. Ölçülebilir hedefler belirlenir:
+
+  • İlk görünür yanıt süresi
+  • Bellek ve işlemci kullanımı
+  • Büyük girdilerde tepki süresi
+  • Dış servis istek sayısı
+  • Önbelleğin doğruluğu ve geçerlilik süresi
+
+Üretim ve yerel geliştirme ayarlarının farkları açık olmalıdır. Ortam değişkenlerinin önceliği ve varsayılan değerleri belgelenir; bir değişkenin eksik olması sessiz ve tehlikeli bir varsayılan oluşturmamalıdır.
+
+----------------------------------------------------------------
+9. DEĞİŞİKLİK KAYDI
+----------------------------------------------------------------
+
+Her önemli değişiklik için kısa bir not tutulur:
+
+  • Hangi sorun çözüldü?
+  • Neden bu yöntem seçildi?
+  • Hangi dosyalar veya sözleşmeler etkilendi?
+  • Hangi testler çalıştırıldı?
+  • Bilinen sınırlamalar nelerdir?
+  • Geri alma yolu nedir?
+
+Kod, test ve belge birlikte güncellenir. Gerçekleştirilmemiş testler yapılmış gibi sunulmaz; geçici çözümler kalıcı tasarım kararları olarak gizlenmez.
+
+----------------------------------------------------------------
+10. ERGİN TEKNİK ATÖLYE İLKESİ
+----------------------------------------------------------------
+
+Bir proje, adından veya sunumundan önce davranışıyla değerlendirilir. Tasarım kararları açıklanabilir olmalı, hata durumları saklanmamalı ve sınırlar açıkça belirtilmelidir.
+
+Keşfet → Tasarla → Uygula → Sına → Kaydet → İyileştir
+
+ERGİN TEKNİK ATÖLYE
+================================================================
