@@ -2,6 +2,10 @@
 
 Bu depo, Ergin Teknik Atölye projelerinde kullanılacak genel mühendislik ve doğrulama notlarını toplar.
 
+## Ana belge
+
+- `ergin-teknik-atolye-notlari.txt`: tasarım, mimari, doğrulama ve bakım notları.
+
 ## Çalışma başlıkları
 
 - Problem tanımı ve kapsam sınırları
