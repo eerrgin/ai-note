@@ -1,15 +1,19 @@
-# ai-note
-al
-Bir dil modeliyle uygulama geliştirildiyse modelin ne yaptığı, API veya yerel çıkarım yönteminin nasıl çalıştığı.
+# Ergin Teknik Atölye · Geliştirme Defteri
 
+Bu depo, Ergin Teknik Atölye projelerinde kullanılacak genel mühendislik ve doğrulama notlarını toplar.
 
+## Çalışma başlıkları
 
-RAG veya bilgi erişimi kullanıldıysa belgelerin nasıl parçalandığı, gömlemelerin nasıl üretildiği, aramanın nasıl değerlendirildiği.
+- Problem tanımı ve kapsam sınırları
+- Arayüz ve veri sözleşmeleri
+- Veri kaynakları ve yerel / uzak çalışma tercihleri
+- Hata durumları, yeniden deneme ve güvenli geri dönüş
+- Gizlilik, günlükler ve sırların korunması
+- Test planı, kabul ölçütleri ve bilinen sınırlamalar
+- Tasarım kararları ve değişiklik kaydı
 
+## İlke
 
+Bir özelliğin nasıl çalıştığı, hangi varsayımlara dayandığı, nasıl sınandığı ve nerede yetersiz kalabileceği açıkça yazılır. Belirsizlikler başarı iddiasına dönüştürülmez.
 
-Bir yapay zekâ aracı geliştirildiyse hangi problemi çözdüğü, hangi durumda hata verdiği ve nasıl test edildiği.
-
-
-
-Kodun yapay zekâ yardımıyla oluşturulduğu durumlarda insanın yaptığı tasarım seçimleri, doğrulama ve düzeltmeler.
+Ana kimlik: **Ergin Teknik Atölye**.
